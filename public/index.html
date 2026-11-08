@@ -23,7 +23,8 @@ h1{font-size:16px;margin:0 0 4px}
 #statusText{font-size:12px;line-height:1.5;color:var(--muted)}
 .ok{color:#0a7a2f}.bad{color:#b3261e}.warn{color:#b26a00}
 select,button,input{font:inherit}
-#usagePanel summary{cursor:pointer;color:var(--accent);margin-top:4px;font-size:12px}
+#settingsPanel input{width:100%;padding:6px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:4px}
+#settingsPanel summary,#usagePanel summary{cursor:pointer;color:var(--accent);margin-top:4px;font-size:12px}
 #usageBody{font-size:12px;line-height:1.5;margin-top:4px}
 #usageBody table{margin:4px 0}
 #settingsSave{margin-top:6px;padding:4px 12px}
@@ -91,6 +92,16 @@ details summary{cursor:pointer;color:var(--accent);margin-top:6px}
 </style></head><body>
 <div id="sidebar">
  <div class="padded"><h1>Rapid Penang</h1><div id="statusText">Loading…</div>
+  <!-- Only shown when there is no Node server (browser mode) -->
+  <details id="settingsPanel" hidden>
+   <summary>Settings</summary>
+   <span class="field-label">Your email (sent to Nominatim so OSM can contact you)</span>
+   <input id="settingEmail" type="email" placeholder="you@example.com">
+   <span class="field-label">Realtime proxy URL (optional)</span>
+   <input id="settingProxy" type="url" placeholder="https://your-worker.workers.dev">
+   <button id="settingsSave">Save</button>
+   <div class="subtle" style="margin-top:4px">The proxy is only needed if the browser can't reach data.gov.my directly (see DEPLOY.md).</div>
+  </details>
   <!-- Data meter: how much internet the app is using -->
   <details id="usagePanel">
    <summary>Data usage</summary>
@@ -256,6 +267,7 @@ async function startApp() {
   tileLayer.on('tileload', () => (tilesLoaded += 1)); // the browser doesn't tell us tile sizes, but we can count them
   tileLayer.addTo(map);
   byId('usagePanel').addEventListener('toggle', renderUsagePanel);
+  setupSettingsPanel();
 
   routeNames = Object.keys(gtfs.routes).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })); // 2 before 10
   routeNames.forEach((name, index) => (routeColors[name] = ROUTE_COLOR_PALETTE[index % ROUTE_COLOR_PALETTE.length]));
@@ -574,6 +586,21 @@ async function renderUsagePanel() {
   }
   byId('usageBody').innerHTML = html;
   byId('usageReset').onclick = () => { backend.usage.reset(); tilesLoaded = 0; lastRefreshUsage = null; renderUsagePanel(); };
+}
+
+// =====================================================================================
+// SETTINGS (browser mode only)
+// =====================================================================================
+function setupSettingsPanel() {
+  if (backend.mode !== 'browser') return; // in server mode the server's own settings (environment variables) are used
+  byId('settingsPanel').hidden = true;
+  const current = backend.getSettings();
+  byId('settingEmail').value = current.email;
+  byId('settingProxy').value = current.proxyUrl;
+  byId('settingsSave').onclick = () => {
+    backend.saveSettings({ email: byId('settingEmail').value, proxyUrl: byId('settingProxy').value });
+    refreshLiveBuses(); // try again straight away with the new settings
+  };
 }
 
 // =====================================================================================
