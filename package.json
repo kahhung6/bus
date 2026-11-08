@@ -1,0 +1,14 @@
+{
+  "name": "penang-bus-map",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "update-data": "node update-data.js",
+    "build-data": "node build-data.js",
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

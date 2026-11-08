@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1e66d0">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Penang Bus">
+<title>Rapid Penang – Bus tracker</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Colours are CSS variables so dark mode only has to redefine them once. */
+:root{--bg:#fafafa;--fg:#222;--muted:#666;--line:#ddd;--card:#fff;--accent:#1e66d0}
+@media (prefers-color-scheme:dark){:root{--bg:#1b1b1b;--fg:#eee;--muted:#aaa;--line:#333;--card:#242424;--accent:#6aa6ff}}
+*{box-sizing:border-box}
+body{margin:0;font:14px system-ui,sans-serif;display:flex;height:100vh;color:var(--fg);background:var(--bg)}
+
+/* Layout: left sidebar (controls + list + details), map fills the rest. */
+#sidebar{width:340px;display:flex;flex-direction:column;border-right:1px solid var(--line);overflow:hidden}
+#map{flex:1}
+.padded{padding:10px 12px;border-bottom:1px solid var(--line)}
+h1{font-size:16px;margin:0 0 4px}
+#statusText{font-size:12px;line-height:1.5;color:var(--muted)}
+.ok{color:#0a7a2f}.bad{color:#b3261e}.warn{color:#b26a00}
+select,button,input{font:inherit}
+#settingsPanel input{width:100%;padding:6px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:4px}
+#settingsPanel summary,#usagePanel summary{cursor:pointer;color:var(--accent);margin-top:4px;font-size:12px}
+#usageBody{font-size:12px;line-height:1.5;margin-top:4px}
+#usageBody table{margin:4px 0}
+#settingsSave{margin-top:6px;padding:4px 12px}
+select{width:100%;padding:6px;margin-bottom:6px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:4px}
+label.checkbox-label{display:block;font-size:12px;margin-top:2px}
+
+/* Bus list */
+#busList{max-height:26vh;overflow:auto;border-bottom:1px solid var(--line)}
+.bus-item{display:flex;gap:8px;align-items:center;width:100%;text-align:left;padding:6px 12px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--fg);cursor:pointer}
+.bus-item:hover{background:var(--card)}
+.bus-item.selected{background:var(--card);outline:2px solid var(--accent);outline-offset:-2px}
+.route-badge{min-width:38px;text-align:center;color:#fff;border-radius:4px;padding:2px 4px;font-weight:700;font-size:12px}
+.bus-item .bus-text{flex:1;min-width:0}
+.bus-item .bus-text small{display:block;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Detail card for the selected bus */
+#busDetail{flex:1;overflow:auto;padding:10px 12px;font-size:13px}
+#busDetail h2{font-size:15px;margin:0}
+.subtle{color:var(--muted)}
+.section{margin-top:10px}
+.section h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 4px}
+table{width:100%;border-collapse:collapse}
+td{padding:3px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td.right{text-align:right;white-space:nowrap;padding-left:8px}
+.big-number{font-size:18px;font-weight:700}
+.pill{display:inline-block;font-size:11px;border:1px solid var(--line);border-radius:10px;padding:0 6px;margin-left:4px;color:var(--muted)}
+
+/* The selected bus marker on the map: a coloured circle with a little arrow showing its heading. */
+.selected-bus-marker{width:30px;height:30px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 6px #000;position:relative}
+.selected-bus-marker i{position:absolute;left:50%;top:-10px;margin-left:-6px;border:6px solid transparent;border-bottom:10px solid #111;transform-origin:6px 25px}
+
+/* Tabs ("Live buses" / "Trip planner") */
+[hidden]{display:none!important}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tab-button{flex:1;padding:8px;border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);cursor:pointer;font-weight:600}
+.tab-button.active{color:var(--fg);border-bottom-color:var(--accent)}
+.tab-panel{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+#plannerTab{overflow:auto}
+.field-label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:4px 0 2px}
+#plannerResult{padding:10px 12px;font-size:13px}
+details summary{cursor:pointer;color:var(--accent);margin-top:6px}
+
+/* Directions tab */
+.place-row{display:flex;gap:4px;margin-bottom:2px}
+.place-row input{flex:1;min-width:0;padding:6px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:4px}
+.icon-button{padding:4px 8px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:4px;cursor:pointer}
+.icon-button.active{outline:2px solid var(--accent)}
+.suggestions{max-height:30vh;overflow:auto}
+.suggestion{display:block;width:100%;text-align:left;padding:5px 6px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--fg);cursor:pointer;font-size:12px}
+.suggestion:hover{background:var(--card)}
+.swap-row{text-align:center;margin:2px 0}
+#directionsHint{font-size:12px;margin-top:4px}
+#directionsResult{padding:6px 12px 12px}
+.option{border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:8px;cursor:pointer;background:var(--card)}
+.option.selected{outline:2px solid var(--accent)}
+.option-top{display:flex;justify-content:space-between;align-items:baseline}
+.chips{margin:4px 0;line-height:1.9}
+.walk-chip{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:10px;padding:0 5px}
+.arrow{color:var(--muted);margin:0 3px}
+.legs{list-style:none;margin:6px 0 0;padding:0}
+.legs li{padding:5px 0;border-top:1px solid var(--line);font-size:12px}
+.live-note{color:#0a7a2f;font-weight:600}
+.endpoint-marker{width:24px;height:24px;border-radius:50%;color:#fff;font:bold 13px/24px system-ui;text-align:center;border:2px solid #fff;box-shadow:0 0 4px #000}
+@media (max-width:760px){body{flex-direction:column-reverse}#sidebar{width:100%;height:55vh}#map{height:45vh;flex:none}}
+</style></head><body>
+<div id="sidebar">
+ <div class="padded"><h1>Rapid Penang</h1><div id="statusText">Loading…</div>
+  <!-- Only shown when there is no Node server (browser mode) -->
+  <details id="settingsPanel" hidden>
+   <summary>Settings</summary>
+   <span class="field-label">Your email (sent to Nominatim so OSM can contact you)</span>
+   <input id="settingEmail" type="email" placeholder="you@example.com">
+   <span class="field-label">Realtime proxy URL (optional)</span>
+   <input id="settingProxy" type="url" placeholder="https://your-worker.workers.dev">
+   <button id="settingsSave">Save</button>
+   <div class="subtle" style="margin-top:4px">The proxy is only needed if the browser can't reach data.gov.my directly (see DEPLOY.md).</div>
+  </details>
+  <!-- Data meter: how much internet the app is using -->
+  <details id="usagePanel">
+   <summary>Data usage</summary>
+   <div id="usageBody" class="subtle">Waiting for the first refresh…</div>
+  </details></div>
+ <div class="tabs">
+  <button class="tab-button active" id="tabButtonBuses">Live buses</button>
+  <button class="tab-button" id="tabButtonPlanner">Trip planner</button>
+  <button class="tab-button" id="tabButtonDirections">Directions</button>
+ </div>
+
+ <!-- TAB 1: live buses -->
+ <div id="busesTab" class="tab-panel">
+  <div class="padded">
+   <select id="routeFilter"><option value="">All routes</option></select>
+   <label class="checkbox-label"><input type="checkbox" id="showOtherBuses" checked> Show other buses on map (no address lookups)</label>
+   <label class="checkbox-label"><input type="checkbox" id="showAllRouteLines"> Show all route lines</label>
+  </div>
+  <div id="busList"></div>
+  <div id="busDetail"><span class="subtle">Pick a bus from the list (or click a dot on the map) to see where it is, its next stops and how far to the terminal.</span></div>
+ </div>
+
+ <!-- TAB 3: directions (any place A -> any place B: walk + buses + changes) -->
+ <div id="directionsTab" class="tab-panel" hidden>
+  <div class="padded">
+   <span class="field-label">From</span>
+   <div class="place-row">
+    <input id="fromInput" placeholder="Stop name, place, or 📍" autocomplete="off">
+    <button class="icon-button" id="fromLocate" title="Use my location (GPS)">📍</button>
+    <button class="icon-button" id="fromPick" title="Pick on the map">🗺</button>
+   </div>
+   <div id="fromSuggestions" class="suggestions"></div>
+   <div class="swap-row"><button class="icon-button" id="swapPlaces" title="Swap From and To">⇅ Swap</button></div>
+   <span class="field-label">To</span>
+   <div class="place-row">
+    <input id="toInput" placeholder="Stop name or place" autocomplete="off">
+    <button class="icon-button" id="toLocate" title="Use my location (GPS)">📍</button>
+    <button class="icon-button" id="toPick" title="Pick on the map">🗺</button>
+   </div>
+   <div id="toSuggestions" class="suggestions"></div>
+   <div id="directionsHint" class="subtle">Type a stop name, or press Enter to search for a place. 📍 uses your GPS and 🗺 lets you tap the map.</div>
+  </div>
+  <div id="directionsResult"></div>
+ </div>
+
+ <!-- TAB 2: trip planner (stop A -> stop B on one route direction) -->
+ <div id="plannerTab" class="tab-panel" hidden>
+  <div class="padded">
+   <span class="field-label">Route</span>
+   <select id="plannerRoute"><option value="">Choose a route…</option></select>
+   <span class="field-label">Direction</span>
+   <select id="plannerDirection" disabled></select>
+   <span class="field-label">Board at</span>
+   <select id="plannerFrom" disabled></select>
+   <span class="field-label">Get off at</span>
+   <select id="plannerTo" disabled></select>
+  </div>
+  <div id="plannerResult" class="subtle">Choose a route, a direction, and the two stops.</div>
+ </div>
+</div>
+<div id="map"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- Shared logic (also used by the Node server) + the data-source layer -->
+<script src="lib/geo.js"></script>
+<script src="lib/gtfsrt.js"></script>
+<script src="lib/core.js"></script>
+<script src="lib/geocoder.js"></script>
+<script src="lib/feed.js"></script>
+<script src="lib/usage.js"></script>
+<script src="backend.js"></script>
+<script>
+/* =====================================================================================
+   HOW THIS PAGE WORKS
+   1. On load it downloads data.json (routes, route lines, stops) once.
+   2. Every 30 s it asks the server for /api/vehicles (all live buses) and redraws the list + map dots.
+   3. When you select a bus it asks /api/bus?key=... for that bus's details, draws its route and stops,
+      and (only for that bus, and only after it moves ~150 m) asks /api/geocode for a street address.
+   ===================================================================================== */
+
+// ---------- settings ----------
+const REFRESH_INTERVAL_MS = 30000;          // the realtime feed itself updates every ~30 s
+const STALE_AFTER_SECONDS = 300;            // a bus silent for 5 min is flagged as out of date
+const MIN_MOVE_BEFORE_NEW_ADDRESS_METERS = 150; // don't re-lookup the address until the bus has moved this far
+const OFF_ROUTE_WARNING_METERS = 150;
+
+// ---------- state (what the page currently knows) ----------
+let gtfs;                    // contents of data.json
+let backend;                 // where data comes from: the Node server or the browser itself (see backend.js)
+let routeNames = [];         // sorted route names, e.g. ["11","12","101",...]
+const routeColors = {};      // route name -> colour
+let liveBuses = [];          // latest list from /api/vehicles
+let feedTimestamp = 0;       // when the feed was generated (unix seconds)
+let lastSuccessMs = 0;       // when we last got data successfully
+let lastErrorText = null;
+let tilesLoaded = 0;         // map tiles loaded since opening (for the data-usage panel)
+let lastRefreshUsage = null; // { totalBytes, categories } downloaded by the most recent refresh
+let staleWarning = null;    // set when the server could not reach the live feed and is showing older data
+let selectedBusKey = null;   // which bus is selected (null = none)
+let busDetail = null;        // latest /api/bus answer for the selected bus
+let activeTab = 'buses';     // 'buses' or 'planner'
+let addressLookup = null;    // { lat, lon, text, state: 'loading'|'ok'|'error', errorText } for the selected bus
+
+const ROUTE_COLOR_PALETTE = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#008080','#9a6324','#800000','#808000','#000075','#e91e63','#00897b','#6d4c41','#546e7a','#d81b60','#1e88e5'];
+
+// ---------- small helpers ----------
+const byId = (id) => document.getElementById(id);
+
+/** Makes text safe to put inside HTML (stops a stop name like "A&B <x>" from breaking the page). */
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/** Straight-line distance in metres between two lat/lon points (haversine). */
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const earthRadius = 6371000, toRadians = Math.PI / 180;
+  const deltaLat = (lat2 - lat1) * toRadians, deltaLon = (lon2 - lon1) * toRadians;
+  const a = Math.sin(deltaLat / 2) ** 2 + Math.cos(lat1 * toRadians) * Math.cos(lat2 * toRadians) * Math.sin(deltaLon / 2) ** 2;
+  return 2 * earthRadius * Math.asin(Math.sqrt(a));
+}
+
+/** 70 -> "70 m", 1530 -> "1.5 km" */
+function formatDistance(meters) {
+  if (meters == null) return '';
+  return meters < 1000 ? Math.round(meters / 10) * 10 + ' m' : (meters / 1000).toFixed(1) + ' km';
+}
+
+/** 30 -> "under 1 min", 600 -> "10 min", 4000 -> "1 h 7 min" */
+function formatEta(seconds) {
+  if (seconds == null) return '–';
+  if (seconds < 45) return 'under 1 min';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return minutes + ' min';
+  return Math.floor(minutes / 60) + ' h ' + (minutes % 60) + ' min';
+}
+
+/** 20261107 -> "7 Nov 2026" */
+function formatDateNumber(dateNumber) {
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${dateNumber % 100} ${monthNames[Math.floor(dateNumber / 100) % 100 - 1]} ${Math.floor(dateNumber / 10000)}`;
+}
+
+const colorForRoute = (routeName) => routeColors[routeName] || '#555'; // grey when the route is unknown
+
+// ---------- map and layers ----------
+// Leaflet "layer groups" are like folders of drawings that we can clear and redraw independently.
+const map = L.map('map', { preferCanvas: true }).setView([5.38, 100.31], 11); // centred on Penang
+// (the map tiles are added in startApp(), using the tile URL the server is configured with)
+const allRouteLinesLayer = L.layerGroup();            // faint lines for every route (optional)
+const selectedRouteLayer = L.layerGroup().addTo(map); // the selected bus's route line
+const routeStopsLayer = L.layerGroup().addTo(map);    // the selected bus's stops
+const otherBusesLayer = L.layerGroup().addTo(map);    // small dots for the other buses
+const selectedBusLayer = L.layerGroup().addTo(map);   // the big marker for the selected bus
+const plannerLayer = L.layerGroup().addTo(map);       // everything drawn by the trip planner tab
+const directionsLayer = L.layerGroup().addTo(map);     // everything drawn by the directions tab
+
+// ---------- startup ----------
+async function startApp() {
+  gtfs = await (await fetch('data.json')).json();
+
+  // Server mode (Node) or browser mode (static hosting)? See backend.js.
+  backend = await createBackend(gtfs);
+  // Which map tiles to use comes from the backend config (the Node server's TILE_URL), so providers can be switched without editing this file.
+  const tileLayer = L.tileLayer(backend.config.tileUrl, { maxZoom: 19, attribution: backend.config.tileAttribution });
+  tileLayer.on('tileload', () => (tilesLoaded += 1)); // the browser doesn't tell us tile sizes, but we can count them
+  tileLayer.addTo(map);
+  byId('usagePanel').addEventListener('toggle', renderUsagePanel);
+  setupSettingsPanel();
+
+  routeNames = Object.keys(gtfs.routes).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })); // 2 before 10
+  routeNames.forEach((name, index) => (routeColors[name] = ROUTE_COLOR_PALETTE[index % ROUTE_COLOR_PALETTE.length]));
+  routeNames.forEach((name) => byId('routeFilter').add(new Option(name, name)));
+
+  // Prepare the (optional) layer showing every route line.
+  routeNames.forEach((name) => {
+    gtfs.routes[name].variants.forEach((variant) => {
+      const points = gtfs.shapes[variant.shapeId];
+      if (points) L.polyline(points, { color: colorForRoute(name), weight: 3, opacity: 0.5 }).bindTooltip(`${name} → ${variant.headsign}`, { sticky: true }).addTo(allRouteLinesLayer);
+    });
+  });
+
+  byId('routeFilter').onchange = renderBusList;
+  byId('showOtherBuses').onchange = drawOtherBuses;
+  byId('showAllRouteLines').onchange = () => (byId('showAllRouteLines').checked ? allRouteLinesLayer.addTo(map) : map.removeLayer(allRouteLinesLayer));
+
+  setupTabs();
+  setupPlanner();
+  setupDirections();
+
+  await refreshLiveBuses();
+  setInterval(refreshLiveBuses, REFRESH_INTERVAL_MS);
+}
+
+// ---------- fetching the live bus list ----------
+async function refreshLiveBuses() {
+  const usageBefore = backend.usage.snapshot(); // so we can tell how much THIS refresh downloaded
+  try {
+    const json = await backend.getVehicles();
+    liveBuses = json.vehicles.filter((bus) => bus.key); // we can only select buses that have some identifier
+    staleWarning = json.stale ? json.staleReason : null; // the server is showing its last good data
+    feedTimestamp = json.feedTimestamp;
+    lastSuccessMs = Date.now();
+    lastErrorText = null;
+  } catch (error) {
+    lastErrorText = 'Realtime fetch failed: ' + error.message;
+  }
+  renderStatus();
+  renderBusList();
+  drawOtherBuses();
+  if (activeTab === 'buses' && selectedBusKey) await loadSelectedBusDetail(); // keep the selected bus up to date too
+  if (activeTab === 'planner') await runPlanner(false); // refresh live ETAs in the planner
+  if (activeTab === 'directions') await runDirections(false); // refresh times and live buses in the directions
+  lastRefreshUsage = PenangLib.usage.diffSnapshots(usageBefore, backend.usage.snapshot());
+  renderUsagePanel();
+}
+
+function renderStatus() {
+  const nowSeconds = Date.now() / 1000;
+  const freshCount = liveBuses.filter((bus) => bus.timestamp && nowSeconds - bus.timestamp <= STALE_AFTER_SECONDS).length;
+  let html = '';
+  if (lastSuccessMs) {
+    html += `<span class="ok">${liveBuses.length} buses in feed (${freshCount} reported &lt;5 min ago)</span><br>`
+          + `Feed time ${new Date((feedTimestamp || lastSuccessMs / 1000) * 1000).toLocaleTimeString()} · refreshes every 30 s`;
+  }
+  if (staleWarning) html += `<br><span class="warn">Showing older data: ${escapeHtml(staleWarning)}</span>`;
+  if (lastErrorText) html += `<br><span class="bad">${escapeHtml(lastErrorText)}</span>`;
+  byId('statusText').innerHTML = html || 'Loading…';
+}
+
+// ---------- the bus list (select panel) ----------
+function renderBusList() {
+  const routeFilter = byId('routeFilter').value;
+  const visibleBuses = liveBuses
+    .filter((bus) => !routeFilter || bus.routeName === routeFilter)
+    .sort((a, b) =>
+      (a.routeName || '~').localeCompare(b.routeName || '~', undefined, { numeric: true }) || // by route; unknown routes last
+      String(a.plate || a.id).localeCompare(String(b.plate || b.id)));
+
+  const listElement = byId('busList');
+  listElement.innerHTML = '';
+  if (!visibleBuses.length) {
+    listElement.innerHTML = '<div class="padded subtle">No buses for this filter right now.</div>';
+    return;
+  }
+  visibleBuses.forEach((bus) => {
+    const button = document.createElement('button');
+    button.className = 'bus-item' + (bus.key === selectedBusKey ? ' selected' : '');
+    button.innerHTML =
+      `<span class="route-badge" style="background:${colorForRoute(bus.routeName)}">${escapeHtml(bus.routeName || '?')}</span>`
+      + `<span class="bus-text">${escapeHtml(bus.plate || bus.id || bus.key)}`
+      + `<small>${escapeHtml(bus.headsign || 'route unknown')}${bus.speedKmPerHour != null ? ' · ' + bus.speedKmPerHour + ' km/h' : ''}</small></span>`;
+    button.onclick = () => selectBus(bus.key, true);
+    listElement.appendChild(button);
+  });
+}
+
+/** Small coloured dots for every bus except the selected one. Purely a drawing - no address lookups. */
+function drawOtherBuses() {
+  otherBusesLayer.clearLayers();
+  if (activeTab !== 'buses' || !byId('showOtherBuses').checked) return;
+  liveBuses.forEach((bus) => {
+    if (bus.key === selectedBusKey) return;
+    L.circleMarker([bus.lat, bus.lon], { radius: 6, color: '#fff', weight: 2, fillColor: colorForRoute(bus.routeName), fillOpacity: 0.95 })
+      .bindTooltip(escapeHtml(`${bus.routeName || '?'} · ${bus.plate || bus.id || ''}`))
+      .on('click', () => selectBus(bus.key, false))
+      .addTo(otherBusesLayer);
+  });
+}
+
+// ---------- selecting a bus ----------
+async function selectBus(busKey, zoomToBus) {
+  selectedBusKey = busKey;
+  addressLookup = null; // a new bus needs a new address
+  busDetail = null;
+  byId('busDetail').innerHTML = '<span class="subtle">Loading…</span>';
+  renderBusList();
+  drawOtherBuses();
+  await loadSelectedBusDetail(zoomToBus);
+}
+
+async function loadSelectedBusDetail(zoomToBus) {
+  if (!selectedBusKey) return;
+  let detail;
+  try {
+    detail = await backend.getBus(selectedBusKey);
+  } catch (error) {
+    byId('busDetail').innerHTML = `<span class="bad">${escapeHtml(error.message)}</span>`;
+    selectedBusLayer.clearLayers();
+    return;
+  }
+  const isFirstLoad = !busDetail;
+  busDetail = detail;
+  drawSelectedBus(zoomToBus || isFirstLoad);
+  renderBusDetail();
+  lookUpAddressIfNeeded();
+}
+
+/**
+ * Reverse geocoding (coordinates -> street address) happens ONLY for the selected bus, and only when
+ * it has moved MIN_MOVE_BEFORE_NEW_ADDRESS_METERS since the last lookup. The server additionally enforces
+ * Nominatim's 1-request-per-second rule and caches answers.
+ */
+async function lookUpAddressIfNeeded() {
+  const { lat, lon } = busDetail.vehicle;
+  if (addressLookup && addressLookup.state === 'loading') return; // one lookup at a time
+  if (addressLookup && haversineMeters(addressLookup.lat, addressLookup.lon, lat, lon) < MIN_MOVE_BEFORE_NEW_ADDRESS_METERS) return;
+
+  const previousText = addressLookup && addressLookup.text; // keep showing the old address while the new one loads
+  addressLookup = { lat, lon, text: previousText || null, state: 'loading' };
+  renderBusDetail();
+  try {
+    const json = await backend.geocode(lat, lon);
+    addressLookup = { lat, lon, text: json.address || json.displayName || '(no address found)', state: 'ok' };
+  } catch (error) {
+    addressLookup = { lat, lon, text: previousText || null, state: 'error', errorText: error.message };
+  }
+  renderBusDetail();
+}
+
+// ---------- drawing the selected bus's route on the map ----------
+function drawSelectedBus(zoomToBus) {
+  selectedRouteLayer.clearLayers();
+  routeStopsLayer.clearLayers();
+  selectedBusLayer.clearLayers();
+
+  const bus = busDetail.vehicle;
+  const color = colorForRoute(busDetail.trip ? busDetail.trip.routeName : bus.routeName);
+
+  // Thick line along the route.
+  if (busDetail.shapeId && gtfs.shapes[busDetail.shapeId]) {
+    L.polyline(gtfs.shapes[busDetail.shapeId], { color, weight: 6, opacity: 0.85 }).addTo(selectedRouteLayer);
+  }
+
+  // Stops: grey = already passed, white = still to come, green ring = next stop, red ring = terminal.
+  const nextStopSequence = busDetail.nextStops[0] && busDetail.nextStops[0].sequence;
+  busDetail.routeStops.forEach((stop, index) => {
+    if (stop.lat == null) return;
+    const isNextStop = stop.sequence === nextStopSequence;
+    const isTerminal = index === busDetail.routeStops.length - 1;
+    L.circleMarker([stop.lat, stop.lon], {
+      radius: isTerminal ? 8 : isNextStop ? 7 : 4,
+      weight: isTerminal || isNextStop ? 3 : 1,
+      color: isTerminal ? '#b3261e' : isNextStop ? '#0a7a2f' : '#333',
+      fillColor: stop.hasPassed ? '#999' : '#fff',
+      fillOpacity: 1,
+    }).bindTooltip(`${stop.sequence}. ${escapeHtml(stop.name)}${isTerminal ? ' (terminal)' : ''}`).addTo(routeStopsLayer);
+  });
+
+  // The bus itself, with an arrow rotated to its compass heading.
+  const busIcon = L.divIcon({
+    className: '', iconSize: [30, 30], iconAnchor: [15, 15],
+    html: `<div class="selected-bus-marker" style="background:${color}">${bus.bearingDegrees != null ? `<i style="transform:rotate(${bus.bearingDegrees}deg)"></i>` : ''}</div>`,
+  });
+  L.marker([bus.lat, bus.lon], { icon: busIcon, zIndexOffset: 1000 }).addTo(selectedBusLayer);
+
+  // Zoom so the bus and its next three stops are visible.
+  if (zoomToBus) {
+    const pointsToShow = [[bus.lat, bus.lon], ...busDetail.nextStops.slice(0, 3).filter((s) => s.lat != null).map((s) => [s.lat, s.lon])];
+    map.fitBounds(L.latLngBounds(pointsToShow).pad(0.5), { maxZoom: 16 });
+  }
+}
+
+// ---------- the detail card in the sidebar ----------
+function renderBusDetail() {
+  if (!busDetail) return;
+  const bus = busDetail.vehicle, trip = busDetail.trip, terminal = busDetail.terminal;
+  const routeName = trip ? trip.routeName : bus.routeName;
+
+  // Title
+  let html = `<h2><span class="route-badge" style="background:${colorForRoute(routeName)}">${escapeHtml(routeName || '?')}</span> ${escapeHtml(bus.plate || bus.id || bus.key)}</h2>`;
+  html += `<div class="subtle">${trip ? 'To ' + escapeHtml(trip.headsign) : 'Route could not be determined'}`;
+  if (trip && trip.confidence !== 'exact') {
+    html += `<span class="pill" title="The trip id did not match the timetable, so route/direction were worked out from position">${trip.confidence === 'route' ? 'route matched' : 'direction inferred'}</span>`;
+  }
+  html += '</div>';
+
+  // Location
+  html += '<div class="section"><h3>Location</h3>';
+  // First the CURRENT STOP (the stop it last went past, i.e. the one just before the next stop), then the street address.
+  const position = busDetail.position;
+  if (position && position.currentStop) {
+    html += position.nextStop
+      ? `Current stop: <b>${escapeHtml(position.currentStop.name)}</b> <span class="subtle">(${formatDistance(position.currentStop.metersPast)} past)</span><br>`
+      : `Reached the terminal: <b>${escapeHtml(position.currentStop.name)}</b><br>`;
+  } else if (position && position.nextStop) { // hasn't passed any stop yet
+    html += `Hasn't passed the first stop yet: <b>${escapeHtml(position.nextStop.name)}</b> <span class="subtle">(${formatDistance(position.nextStop.metersAhead)} to go)</span><br>`;
+  } else if (busDetail.nearestStops.length) { // route unknown, so "before the next stop" can't be worked out: show the closest stop instead
+    html += `Nearest stop: <b>${escapeHtml(busDetail.nearestStops[0].name)}</b> <span class="subtle">(${formatDistance(busDetail.nearestStops[0].distanceMeters)} away)</span><br>`;
+  }
+  if (addressLookup && addressLookup.text) html += escapeHtml(addressLookup.text);
+  else if (addressLookup && addressLookup.state === 'loading') html += '<span class="subtle">Looking up address…</span>';
+  else html += '<span class="subtle">Address unavailable</span>';
+  if (addressLookup && addressLookup.state === 'loading' && addressLookup.text) html += ' <span class="subtle">(updating…)</span>';
+  if (addressLookup && addressLookup.state === 'error') html += `<br><span class="warn">Address lookup: ${escapeHtml(addressLookup.errorText)}</span>`;
+  html += `<br><span class="subtle">${bus.lat.toFixed(5)}, ${bus.lon.toFixed(5)} · ${bus.speedKmPerHour != null ? bus.speedKmPerHour + ' km/h' : 'speed n/a'} · updated ${bus.ageSeconds != null ? bus.ageSeconds + ' s ago' : 'n/a'}</span>`;
+  if (bus.ageSeconds != null && bus.ageSeconds > STALE_AFTER_SECONDS) html += '<br><span class="warn">No report for over 5 minutes – position may be out of date.</span>';
+  if (trip && trip.offRouteMeters > OFF_ROUTE_WARNING_METERS) html += `<br><span class="warn">Bus is ${trip.offRouteMeters} m from the expected route line – direction/route may be wrong.</span>`;
+  html += '</div>';
+
+  // Terminal + next stops (only when we know the route)
+  if (terminal) {
+    const progress = busDetail.progress;
+    html += `<div class="section"><h3>To terminal</h3><span class="big-number">${terminal.stopsLeft}</span> stop${terminal.stopsLeft === 1 ? '' : 's'} left`
+          + ` · ${formatDistance(terminal.distanceMeters)} · ≈ ${formatEta(terminal.etaSeconds)}`
+          + `<br><span class="subtle">${escapeHtml(terminal.name)} (passed ${progress.stopsPassed} of ${progress.totalStops} stops)</span></div>`;
+
+    html += '<div class="section"><h3>Next stops</h3><table>'
+          + busDetail.nextStops.map((stop, index) =>
+              `<tr><td>${index === 0 ? '<b>' : ''}${escapeHtml(stop.name)}${index === 0 ? '</b>' : ''}<br><span class="subtle">${escapeHtml(stop.code || '')}</span></td>`
+              + `<td class="right">${formatDistance(stop.distanceMeters)}<br><b>${formatEta(stop.etaSeconds)}</b></td></tr>`).join('')
+          + '</table>'
+          + `<div class="subtle" style="margin-top:4px">ETA = scheduled running time along the route from the bus's current position${trip.etaBasis === 'distance' ? ' (timetable unusable – assumed 20 km/h)' : ''}; it does not reflect live traffic or delays.</div></div>`;
+  }
+
+  // Nearest stops by straight-line distance (any route)
+  html += '<div class="section"><h3>Nearest stops (straight line)</h3><table>'
+        + busDetail.nearestStops.map((stop) =>
+            `<tr><td>${escapeHtml(stop.name)}<br><span class="subtle">${escapeHtml(stop.code || '')} · ${escapeHtml((stop.routeNames || []).slice(0, 6).join(', '))}${stop.isOnThisRoute ? ' · on this bus’s route' : ''}</span></td>`
+            + `<td class="right">${formatDistance(stop.distanceMeters)}</td></tr>`).join('')
+        + '</table></div>';
+
+  byId('busDetail').innerHTML = html;
+}
+
+// =====================================================================================
+// DATA USAGE PANEL: how much internet is this app using?
+// =====================================================================================
+const USAGE_LABELS = {
+  realtimeFeed: 'Live bus feed (data.gov.my)',
+  appData: 'Data from the app server',
+  addresses: 'Address lookups (Nominatim)',
+  nominatim: 'Address lookups (Nominatim)',
+};
+const REFRESHES_PER_HOUR = 3600000 / REFRESH_INTERVAL_MS; // 120 refreshes an hour at one every 30 s
+const ESTIMATED_TILE_BYTES = [10 * 1024, 25 * 1024];       // typical map tile size range (the browser can't tell us the real size)
+
+/** Bytes the page, scripts and timetable downloaded from OUR OWN site since opening (0 if they came from the cache). */
+function measureFirstLoadBytes() {
+  try {
+    return performance.getEntriesByType('resource')
+      .filter((entry) => entry.name.startsWith(location.origin) && !entry.name.includes('/api/'))
+      .reduce((sum, entry) => sum + (entry.transferSize || 0), 0);
+  } catch (error) { return null; } // Performance API not available
+}
+
+function usageTable(categories) {
+  const rows = Object.entries(categories).map(([kind, entry]) =>
+    `<tr><td>${escapeHtml(USAGE_LABELS[kind] || kind)}</td><td class="right">${entry.count}× · ${PenangLib.usage.formatBytes(entry.bytes)}</td></tr>`);
+  return rows.length ? `<table>${rows.join('')}</table>` : '';
+}
+
+async function renderUsagePanel() {
+  if (!byId('usagePanel').open || !backend) return; // only work when the panel is open
+  const { formatBytes } = PenangLib.usage;
+  const snapshot = backend.usage.snapshot();
+  const minutesOpen = Math.max(1, Math.round((snapshot.nowMs - snapshot.startedAtMs) / 60000));
+
+  let html = '';
+  html += `<b>This device</b> <span class="subtle">(${backend.mode === 'server' ? 'downloads from the app server' : 'downloads straight from the internet'})</span><br>`;
+  if (lastRefreshUsage) {
+    html += `Last refresh (every ${REFRESH_INTERVAL_MS / 1000} s): <b>${formatBytes(lastRefreshUsage.totalBytes)}</b><br>`
+          + `≈ <b>${formatBytes(lastRefreshUsage.totalBytes * REFRESHES_PER_HOUR)}</b> per hour if left open <span class="subtle">(map tiles not included)</span><br>`;
+  }
+  html += `Total in ${minutesOpen} min: <b>${formatBytes(snapshot.totalBytes)}</b>`;
+  html += usageTable(snapshot.categories);
+
+  const [lowTile, highTile] = ESTIMATED_TILE_BYTES;
+  html += `Map tiles: ${tilesLoaded} loaded <span class="subtle">(size not visible to the browser; roughly ${formatBytes(tilesLoaded * lowTile)}–${formatBytes(tilesLoaded * highTile)})</span><br>`;
+  const firstLoad = measureFirstLoadBytes();
+  if (firstLoad !== null) html += `Page + timetable: ${firstLoad > 0 ? formatBytes(firstLoad) + ' downloaded this time' : 'from cache (nothing downloaded)'}<br>`;
+  html += '<button id="usageReset" style="margin-top:4px">Reset counters</button>';
+
+  // In server mode the Node server also uses internet (live feed + addresses) - show that separately.
+  if (backend.getServerUsage) {
+    try {
+      const server = await backend.getServerUsage();
+      const serverMinutes = Math.max(1, Math.round((server.nowMs - server.startedAtMs) / 60000));
+      const feed = server.categories.realtimeFeed;
+      html += `<hr><b>Server → internet</b> <span class="subtle">(the computer running Node)</span><br>`
+            + `Total in ${serverMinutes} min: <b>${formatBytes(server.totalBytes)}</b>`;
+      if (feed) html += `<br>Each live-feed download: <b>${formatBytes(feed.lastBytes)}</b> ≈ ${formatBytes(feed.lastBytes * REFRESHES_PER_HOUR)} per hour`;
+      html += usageTable(server.categories);
+    } catch (error) { html += '<hr><span class="subtle">Server usage unavailable.</span>'; }
+  }
+  byId('usageBody').innerHTML = html;
+  byId('usageReset').onclick = () => { backend.usage.reset(); tilesLoaded = 0; lastRefreshUsage = null; renderUsagePanel(); };
+}
+
+// =====================================================================================
+// SETTINGS (browser mode only)
+// =====================================================================================
+function setupSettingsPanel() {
+  if (backend.mode !== 'browser') return; // in server mode the server's own settings (environment variables) are used
+  byId('settingsPanel').hidden = true;
+  const current = backend.getSettings();
+  byId('settingEmail').value = current.email;
+  byId('settingProxy').value = current.proxyUrl;
+  byId('settingsSave').onclick = () => {
+    backend.saveSettings({ email: byId('settingEmail').value, proxyUrl: byId('settingProxy').value });
+    refreshLiveBuses(); // try again straight away with the new settings
+  };
+}
+
+// =====================================================================================
+// TABS
+// =====================================================================================
+function setupTabs() {
+  byId('tabButtonBuses').onclick = () => setActiveTab('buses');
+  byId('tabButtonPlanner').onclick = () => setActiveTab('planner');
+  byId('tabButtonDirections').onclick = () => setActiveTab('directions');
+}
+
+/** Switches tab and swaps what is drawn on the map (each tab owns its own layers). */
+function setActiveTab(tabName) {
+  activeTab = tabName;
+  byId('busesTab').hidden = tabName !== 'buses';
+  byId('plannerTab').hidden = tabName !== 'planner';
+  byId('directionsTab').hidden = tabName !== 'directions';
+  byId('tabButtonBuses').classList.toggle('active', tabName === 'buses');
+  byId('tabButtonPlanner').classList.toggle('active', tabName === 'planner');
+  byId('tabButtonDirections').classList.toggle('active', tabName === 'directions');
+
+  // Clear the other tabs' drawings.
+  [selectedRouteLayer, routeStopsLayer, selectedBusLayer, otherBusesLayer, plannerLayer, directionsLayer].forEach((layer) => layer.clearLayers());
+  stopPicking();
+
+  if (tabName === 'buses') {
+    drawOtherBuses();
+    if (busDetail) drawSelectedBus(false);
+  } else if (tabName === 'planner') {
+    runPlanner(true);
+  } else {
+    drawDirections(false);
+    if (directions.from && directions.to) runDirections(false);
+  }
+}
+
+// =====================================================================================
+// DIRECTIONS: any place A -> any place B (walk + buses + changes), like a journey planner app
+// =====================================================================================
+const directions = {
+  from: null, to: null,      // { name, lat, lon } once chosen
+  result: null,              // latest answer from backend.planTrip
+  selectedKey: null,         // which option card is open (its route sequence)
+  picking: null,             // 'from' | 'to' while waiting for a tap on the map
+  suggestions: { from: [], to: [] },
+};
+const shapeLineCache = {};   // shapeId -> polyline with running distances (for drawing just the part you ride)
+
+function setDirectionsHint(html) { byId('directionsHint').innerHTML = html; }
+
+function setupDirections() {
+  for (const side of ['from', 'to']) {
+    const input = byId(side + 'Input');
+    input.oninput = () => { directions[side] = null; showLocalSuggestions(side); };   // typing again means "choose a new place"
+    input.onkeydown = (event) => { if (event.key === 'Enter') searchPlacesFor(side); }; // Enter = explicit place search
+    byId(side + 'Locate').onclick = () => useMyLocation(side);
+    byId(side + 'Pick').onclick = () => (directions.picking === side ? stopPicking() : startPicking(side));
+  }
+  byId('swapPlaces').onclick = () => {
+    [directions.from, directions.to] = [directions.to, directions.from];
+    byId('fromInput').value = directions.from ? directions.from.name : '';
+    byId('toInput').value = directions.to ? directions.to.name : '';
+    drawDirections(false);
+    runDirections(true);
+  };
+  map.on('click', (event) => {
+    if (activeTab !== 'directions' || !directions.picking) return;
+    const near = backend.nearestStop(event.latlng.lat, event.latlng.lng);
+    choosePoint(directions.picking, { name: near ? `Near ${near.name}` : `${event.latlng.lat.toFixed(4)}, ${event.latlng.lng.toFixed(4)}`, lat: event.latlng.lat, lon: event.latlng.lng });
+  });
+}
+
+// ---- choosing the start and the destination ----
+
+/** Instant suggestions from the bus-stop list (no network). Place search only happens on Enter/click, never as you type. */
+function showLocalSuggestions(side) {
+  const text = byId(side + 'Input').value.trim();
+  directions.suggestions[side] = backend.searchStops(text);
+  renderSuggestions(side, text);
+}
+
+async function searchPlacesFor(side) {
+  const text = byId(side + 'Input').value.trim();
+  if (text.length < 3) return;
+  byId(side + 'Suggestions').innerHTML = '<div class="subtle" style="padding:4px 6px">Searching places…</div>';
+  try {
+    const { places } = await backend.searchPlaces(text);
+    directions.suggestions[side] = [...backend.searchStops(text), ...places];
+    renderSuggestions(side, text, places.length ? '' : 'No places found.');
+  } catch (error) {
+    renderSuggestions(side, text, 'Place search failed: ' + error.message);
+  }
+}
+
+function renderSuggestions(side, text, message) {
+  const container = byId(side + 'Suggestions');
+  container.innerHTML = '';
+  directions.suggestions[side].forEach((item) => {
+    const button = document.createElement('button');
+    button.className = 'suggestion';
+    button.innerHTML = `${item.kind === 'stop' ? '🚏' : '📍'} <b>${escapeHtml(item.name)}</b> <span class="subtle">${escapeHtml(item.kind === 'stop' ? 'Stop · ' + item.routeNames.slice(0, 6).join(', ') : item.detail || 'Place')}</span>`;
+    button.onclick = () => choosePoint(side, { name: item.name, lat: item.lat, lon: item.lon });
+    container.appendChild(button);
+  });
+  if (text.length >= 3) {
+    const more = document.createElement('button');
+    more.className = 'suggestion';
+    more.innerHTML = `🔎 Search places for “${escapeHtml(text)}”`;
+    more.onclick = () => searchPlacesFor(side);
+    container.appendChild(more);
+  }
+  if (message) { const note = document.createElement('div'); note.className = 'subtle'; note.style.padding = '4px 6px'; note.innerHTML = escapeHtml(message); container.appendChild(note); }
+}
+
+function choosePoint(side, point) {
+  directions[side] = point;
+  byId(side + 'Input').value = point.name;
+  directions.suggestions[side] = [];
+  byId(side + 'Suggestions').innerHTML = '';
+  stopPicking();
+  drawDirections(true);
+  runDirections(true);
+}
+
+function useMyLocation(side) {
+  if (!navigator.geolocation) { setDirectionsHint('<span class="warn">This browser has no GPS support. Type a stop or place, or tap 🗺 and pick on the map.</span>'); return; }
+  if (window.isSecureContext === false) {
+    setDirectionsHint('<span class="warn">Browsers only allow GPS on <b>https://</b> pages (or localhost). Use the https website version, or type a place / tap 🗺 instead.</span>');
+    return;
+  }
+  setDirectionsHint('Finding your location…');
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const { latitude, longitude } = position.coords;
+      const near = backend.nearestStop(latitude, longitude);
+      setDirectionsHint('');
+      choosePoint(side, { name: near ? `My location (near ${near.name})` : 'My location', lat: latitude, lon: longitude });
+    },
+    (error) => setDirectionsHint(`<span class="warn">${error.code === 1 ? 'Location permission was denied. Allow it for this site, or type a place instead.' : error.code === 3 ? 'Finding your location took too long. Try again, or type a place.' : 'Your location is not available right now.'}</span>`),
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 },
+  );
+}
+
+function startPicking(side) {
+  directions.picking = side;
+  byId('fromPick').classList.toggle('active', side === 'from');
+  byId('toPick').classList.toggle('active', side === 'to');
+  map.getContainer().style.cursor = 'crosshair';
+  setDirectionsHint(`Tap the map to set the <b>${side === 'from' ? 'start' : 'destination'}</b>.`);
+}
+function stopPicking() {
+  directions.picking = null;
+  byId('fromPick').classList.remove('active');
+  byId('toPick').classList.remove('active');
+  if (map.getContainer()) map.getContainer().style.cursor = '';
+}
+
+// ---- asking for the directions ----
+
+async function runDirections(zoomToResult) {
+  if (!directions.from || !directions.to) {
+    directions.result = null;
+    byId('directionsResult').innerHTML = '';
+    return;
+  }
+  let result;
+  try {
+    result = await backend.planTrip(directions.from, directions.to);
+  } catch (error) {
+    byId('directionsResult').innerHTML = `<span class="warn">${escapeHtml(error.message)}</span>`;
+    return;
+  }
+  if (activeTab !== 'directions') return; // the user switched tabs while we were working
+  directions.result = result;
+  if (!result.options.some((option) => option.key === directions.selectedKey)) directions.selectedKey = result.options[0] ? result.options[0].key : null;
+  renderDirections();
+  drawDirections(zoomToResult);
+}
+
+const walkMinutes = (seconds) => Math.max(1, Math.round(seconds / 60));
+
+function renderDirections() {
+  const result = directions.result;
+  let html = '';
+  if (result.liveFeedError) html += `<div class="warn" style="font-size:12px;margin-bottom:6px">Live bus data unavailable (${escapeHtml(result.liveFeedError)}). Showing timetable times.</div>`;
+  if (!result.options.length) {
+    html += `<span class="warn">${escapeHtml(result.reason || 'No journey found.')}</span>`;
+    byId('directionsResult').innerHTML = html;
+    return;
+  }
+  html += `<div class="subtle" style="font-size:12px;margin-bottom:6px">From the timetable, leaving now (${escapeHtml(result.nowClock)} Malaysia time). Walking ${4.8} km/h; up to 900 m to a stop and 400 m between stops.</div>`;
+
+  result.options.forEach((option) => {
+    const selected = option.key === directions.selectedKey;
+    const chips = option.legs.map((leg) => leg.kind === 'walk'
+      ? `<span class="walk-chip">🚶 ${walkMinutes(leg.seconds)} min</span>`
+      : `<span class="route-badge" style="background:${colorForRoute(leg.routeName)}">${escapeHtml(leg.routeName)}</span>`).join('<span class="arrow">›</span>');
+    const leaveText = option.kind === 'walk-only' ? 'Walk the whole way'
+      : option.leaveInMinutes <= 0 ? `Leave now (${escapeHtml(option.leaveClock)})` : `Leave in ${option.leaveInMinutes} min (${escapeHtml(option.leaveClock)})`;
+    html += `<div class="option${selected ? ' selected' : ''}" data-key="${escapeHtml(option.key)}">`
+          + `<div class="option-top"><span class="big-number">${formatEta(option.durationSeconds)}</span><span>arrive <b>${escapeHtml(option.arriveClock)}</b>${option.arrivesTomorrow ? ' <span class="pill">tomorrow</span>' : ''}</span></div>`
+          + `<div class="chips">${chips}</div>`
+          + `<div class="subtle" style="font-size:12px">${leaveText}${option.changes ? ` · ${option.changes} change${option.changes > 1 ? 's' : ''}` : ''}</div>`;
+    if (selected) html += renderOptionDetails(option);
+    html += '</div>';
+  });
+  byId('directionsResult').innerHTML = html;
+
+  // Tap a card to open it (and show it on the map).
+  document.querySelectorAll('#directionsResult .option').forEach((card) => {
+    card.onclick = () => { directions.selectedKey = card.dataset.key; renderDirections(); drawDirections(true); };
+  });
+}
+
+function renderOptionDetails(option) {
+  let html = '<ul class="legs">';
+  let firstBus = true;
+  option.legs.forEach((leg) => {
+    if (leg.kind === 'walk') {
+      html += `<li>🚶 Walk ${walkMinutes(leg.seconds)} min (${formatDistance(leg.distanceMeters)}) ${leg.isChange ? 'to the stop for your next bus:' : 'to'} <b>${escapeHtml(leg.to.name)}</b></li>`;
+      return;
+    }
+    html += `<li><span class="route-badge" style="background:${colorForRoute(leg.routeName)}">${escapeHtml(leg.routeName)}</span> <b>${escapeHtml(leg.headsign)}</b><br>`
+          + `Board <b>${escapeHtml(leg.board.name)}</b> at <b>${escapeHtml(leg.departClock)}</b>${leg.departsTomorrow ? ' <span class="pill">tomorrow</span>' : ''}${leg.waitSeconds >= 120 ? ` <span class="subtle">(wait ${walkMinutes(leg.waitSeconds)} min)</span>` : ''}<br>`
+          + `Get off <b>${escapeHtml(leg.alight.name)}</b> at ${escapeHtml(leg.arriveClock)} <span class="subtle">· ${leg.stopsCount} stops · ${walkMinutes(leg.rideSeconds)} min</span>`;
+    if (firstBus && option.liveBuses && option.liveBuses.length) {
+      html += '<br>' + option.liveBuses.map((bus) => `<span class="live-note">Live: ${escapeHtml(bus.plate || 'bus')} is ${bus.minutesAway < 1 ? 'arriving' : bus.minutesAway + ' min away'}</span> <span class="subtle">(${formatDistance(bus.distanceMeters)})</span>`).join('<br>');
+    }
+    if (firstBus && option.laterDepartures && option.laterDepartures.length) {
+      html += `<br><span class="subtle">Next buses from there: ${option.laterDepartures.map((d) => escapeHtml(d.departClock)).join(', ')}</span>`;
+    }
+    html += '</li>';
+    firstBus = false;
+  });
+  return html + '</ul>';
+}
+
+// ---- drawing on the map ----
+
+/** The part of a route's line between two of its stops (by position in the route direction). */
+function slicePatternShape(shapeId, boardIndex, alightIndex, board, alight) {
+  const points = gtfs.shapes[shapeId], stops = gtfs.patterns[shapeId] && gtfs.patterns[shapeId].stops;
+  if (!points || !stops || !stops[boardIndex] || !stops[alightIndex]) return [[board.lat, board.lon], [alight.lat, alight.lon]];
+  const line = shapeLineCache[shapeId] || (shapeLineCache[shapeId] = PenangLib.geo.buildPolyline(points));
+  const fromMeters = stops[boardIndex].distanceAlongRouteMeters, toMeters = stops[alightIndex].distanceAlongRouteMeters;
+  const slice = line.points.filter((_, i) => line.cumulativeMeters[i] >= fromMeters && line.cumulativeMeters[i] <= toMeters);
+  return slice.length >= 2 ? slice : [[board.lat, board.lon], [alight.lat, alight.lon]];
+}
+
+function endpointIcon(letter, color) {
+  return L.divIcon({ className: '', iconSize: [24, 24], iconAnchor: [12, 12], html: `<div class="endpoint-marker" style="background:${color}">${letter}</div>` });
+}
+
+function drawDirections(zoomToResult) {
+  directionsLayer.clearLayers();
+  const bounds = [];
+  if (directions.from) { L.marker([directions.from.lat, directions.from.lon], { icon: endpointIcon('A', '#0a7a2f') }).bindTooltip(escapeHtml(directions.from.name)).addTo(directionsLayer); bounds.push([directions.from.lat, directions.from.lon]); }
+  if (directions.to) { L.marker([directions.to.lat, directions.to.lon], { icon: endpointIcon('B', '#b3261e') }).bindTooltip(escapeHtml(directions.to.name)).addTo(directionsLayer); bounds.push([directions.to.lat, directions.to.lon]); }
+
+  const option = directions.result && directions.result.options.find((o) => o.key === directions.selectedKey);
+  if (option) {
+    option.legs.forEach((leg) => {
+      if (leg.kind === 'walk') {
+        L.polyline([[leg.from.lat, leg.from.lon], [leg.to.lat, leg.to.lon]], { color: '#555', weight: 4, dashArray: '6 8' }).addTo(directionsLayer); // straight-line sketch of the walk
+        return;
+      }
+      const line = slicePatternShape(leg.shapeId, leg.boardIndex, leg.alightIndex, leg.board, leg.alight);
+      L.polyline(line, { color: colorForRoute(leg.routeName), weight: 6, opacity: 0.85 }).addTo(directionsLayer);
+      line.forEach((point) => bounds.push(point));
+      [[leg.board, '#0a7a2f', 'Board'], [leg.alight, '#b3261e', 'Get off']].forEach(([stop, ringColor, label]) =>
+        L.circleMarker([stop.lat, stop.lon], { radius: 7, weight: 3, color: ringColor, fillColor: '#fff', fillOpacity: 1 }).bindTooltip(`${label}: ${escapeHtml(stop.name)}`).addTo(directionsLayer));
+    });
+    (option.liveBuses || []).forEach((bus) => {
+      L.circleMarker([bus.lat, bus.lon], { radius: 8, color: '#fff', weight: 2, fillColor: '#0a7a2f', fillOpacity: 1 }).bindTooltip(escapeHtml(`Live: ${bus.plate || 'bus'} · ${bus.minutesAway} min away`)).addTo(directionsLayer);
+    });
+  }
+  if (zoomToResult && bounds.length >= 2) map.fitBounds(L.latLngBounds(bounds).pad(0.15), { maxZoom: 16 });
+  else if (zoomToResult && bounds.length === 1) map.setView(bounds[0], 15);
+}
+
+// =====================================================================================
+// TRIP PLANNER: pick route + direction + boarding stop + destination stop
+// Answers: how many stops, how far, how long (scheduled), and which live buses are coming.
+// =====================================================================================
+const stopNameById = {}; // filled once from data.json
+
+function fillSelect(selectElement, options, placeholder) {
+  selectElement.innerHTML = '';
+  if (placeholder) selectElement.add(new Option(placeholder, ''));
+  options.forEach(({ value, label }) => selectElement.add(new Option(label, value)));
+  selectElement.disabled = options.length === 0;
+}
+
+function setupPlanner() {
+  gtfs.stops.forEach((stop) => (stopNameById[stop.stopId] = stop.stopName));
+  fillSelect(byId('plannerRoute'), routeNames.map((name) => ({ value: name, label: name })), 'Choose a route…');
+
+  byId('plannerRoute').onchange = onPlannerRouteChanged;
+  byId('plannerDirection').onchange = onPlannerDirectionChanged;
+  byId('plannerFrom').onchange = () => { fillDestinationOptions(); runPlanner(true); };
+  byId('plannerTo').onchange = () => runPlanner(true);
+}
+
+function onPlannerRouteChanged() {
+  const routeName = byId('plannerRoute').value;
+  const variants = routeName ? gtfs.routes[routeName].variants.filter((v) => gtfs.patterns[v.shapeId]) : [];
+  fillSelect(byId('plannerDirection'), variants.map((v) => ({ value: v.shapeId, label: v.headsign })));
+  onPlannerDirectionChanged();
+}
+
+/** Lists the stops of the chosen direction, in travelling order, as "boarding" choices. */
+function onPlannerDirectionChanged() {
+  const shapeId = byId('plannerDirection').value;
+  const pattern = shapeId && gtfs.patterns[shapeId];
+  const fromOptions = pattern ? pattern.stops.map((s, index) => ({ value: s.stopId, label: `${index + 1}. ${stopNameById[s.stopId] || s.stopId}` })) : [];
+  fillSelect(byId('plannerFrom'), fromOptions);
+  fillDestinationOptions(true);
+  runPlanner(true);
+}
+
+/** The destination can only be a stop AFTER the boarding stop, so only offer those. */
+function fillDestinationOptions(selectLastStop) {
+  const shapeId = byId('plannerDirection').value;
+  const pattern = shapeId && gtfs.patterns[shapeId];
+  if (!pattern) return fillSelect(byId('plannerTo'), []);
+
+  const previousChoice = byId('plannerTo').value;
+  const fromIndex = pattern.stops.findIndex((s) => s.stopId === byId('plannerFrom').value);
+  const toOptions = pattern.stops
+    .map((s, index) => ({ value: s.stopId, label: `${index + 1}. ${stopNameById[s.stopId] || s.stopId}`, index }))
+    .filter((option) => option.index > fromIndex);
+  fillSelect(byId('plannerTo'), toOptions);
+
+  // Keep the previous destination if it is still valid, otherwise default to the last stop.
+  const stillValid = toOptions.some((option) => option.value === previousChoice);
+  byId('plannerTo').value = stillValid && !selectLastStop ? previousChoice : (toOptions.length ? toOptions[toOptions.length - 1].value : '');
+}
+
+async function runPlanner(zoomToJourney) {
+  const shapeId = byId('plannerDirection').value, fromStopId = byId('plannerFrom').value, toStopId = byId('plannerTo').value;
+  const resultElement = byId('plannerResult');
+  if (!shapeId || !fromStopId || !toStopId) {
+    plannerLayer.clearLayers();
+    resultElement.innerHTML = '<span class="subtle">Choose a route, a direction, and the two stops.</span>';
+    return;
+  }
+  let journey;
+  try {
+    journey = await backend.getJourney(shapeId, fromStopId, toStopId);
+  } catch (error) {
+    plannerLayer.clearLayers();
+    resultElement.innerHTML = `<span class="warn">${escapeHtml(error.message)}</span>`;
+    return;
+  }
+  if (activeTab !== 'planner') return; // the user switched tabs while we were loading
+  drawJourney(journey, zoomToJourney);
+  renderJourney(journey);
+}
+
+function drawJourney(journey, zoomToJourney) {
+  plannerLayer.clearLayers();
+  const color = colorForRoute(journey.routeName);
+
+  if (journey.routeLine.length >= 2) L.polyline(journey.routeLine, { color, weight: 7, opacity: 0.85 }).addTo(plannerLayer);
+
+  journey.stops.forEach((stop, index) => {
+    if (stop.lat == null) return;
+    const isBoarding = index === 0, isDestination = index === journey.stops.length - 1;
+    L.circleMarker([stop.lat, stop.lon], {
+      radius: isBoarding || isDestination ? 8 : 4, weight: isBoarding || isDestination ? 3 : 1,
+      color: isBoarding ? '#0a7a2f' : isDestination ? '#b3261e' : '#333', fillColor: '#fff', fillOpacity: 1,
+    }).bindTooltip(`${isBoarding ? 'Board: ' : isDestination ? 'Get off: ' : ''}${escapeHtml(stop.name)}`).addTo(plannerLayer);
+  });
+
+  journey.approachingBuses.forEach((bus) => {
+    L.circleMarker([bus.lat, bus.lon], { radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 })
+      .bindTooltip(escapeHtml(`${journey.routeName} · ${bus.plate || ''} · ${formatEta(bus.secondsToBoarding)} to boarding stop`)).addTo(plannerLayer);
+  });
+
+  if (zoomToJourney) {
+    const points = journey.stops.filter((s) => s.lat != null).map((s) => [s.lat, s.lon]);
+    if (points.length) map.fitBounds(L.latLngBounds(points).pad(0.2));
+  }
+}
+
+function renderJourney(journey) {
+  const color = colorForRoute(journey.routeName);
+  let html = `<div><span class="route-badge" style="background:${color}">${escapeHtml(journey.routeName)}</span> <span class="subtle">${escapeHtml(journey.headsign)}</span></div>`;
+
+  // The journey itself (timetable based)
+  html += `<div class="section"><h3>Your journey</h3><span class="big-number">${journey.stopsToTravel}</span> stop${journey.stopsToTravel === 1 ? '' : 's'}`
+        + ` · ${formatDistance(journey.distanceMeters)} · ≈ <b>${formatEta(journey.scheduledSeconds)}</b> on board`
+        + `<br><span class="subtle">${escapeHtml(journey.from.name)} → ${escapeHtml(journey.to.name)}</span></div>`;
+
+  // Next SCHEDULED buses from the boarding stop (timetable: includes buses that haven't left the terminal yet)
+  const scheduled = journey.scheduled;
+  html += `<div class="section"><h3>Next scheduled buses${scheduled && scheduled.available ? ' (from ' + escapeHtml(scheduled.nowClock) + ', Malaysia time)' : ''}</h3>`;
+  if (!scheduled || !scheduled.available) {
+    html += '<span class="subtle">No timetable data for this direction.</span>';
+  } else if (!scheduled.timetableCoversToday) {
+    html += `<span class="warn">Today is outside the timetable data (${formatDateNumber(scheduled.coverage.from)} – ${formatDateNumber(scheduled.coverage.to)}). Update data.json with a newer GTFS download.</span>`;
+  } else if (!scheduled.departures.length) {
+    html += `<span class="subtle">${scheduled.servicesToday ? 'No more scheduled departures found.' : 'No scheduled service for this route today.'}</span>`;
+  } else {
+    html += '<table>' + scheduled.departures.map((departure) =>
+      `<tr><td><b>${escapeHtml(departure.departureClock)}</b>${departure.isTomorrow ? ' <span class="pill">tomorrow</span>' : ''}<br>`
+      + `<span class="subtle">${departure.minutesFromNow < 1 ? 'now' : 'in ' + formatEta(departure.minutesFromNow * 60)}</span></td>`
+      + `<td class="right">arrives ${escapeHtml(departure.arrivalClock)}<br><span class="subtle">${Math.max(1, Math.round(departure.travelSeconds / 60))} min ride</span></td></tr>`).join('') + '</table>'
+      + '<div class="subtle" style="margin-top:4px">From the timetable, not live. Public-holiday schedules are not in the data. The live list below shows which buses are really on their way.</div>';
+  }
+  html += '</div>';
+
+  // Live buses still heading to the boarding stop
+  html += '<div class="section"><h3>Buses heading to your boarding stop</h3>';
+  if (journey.liveFeedError) html += `<span class="warn">Live data unavailable: ${escapeHtml(journey.liveFeedError)}</span>`;
+  else if (!journey.approachingBuses.length) html += '<span class="subtle">No live bus on this direction is approaching right now.</span>';
+  else {
+    html += '<table>' + journey.approachingBuses.map((bus) =>
+      `<tr><td><b>${escapeHtml(bus.plate || '?')}</b><br><span class="subtle">${formatDistance(bus.distanceToBoardingMeters)} away${bus.speedKmPerHour != null ? ' · ' + bus.speedKmPerHour + ' km/h' : ''}</span></td>`
+      + `<td class="right">Reaches you in <b>${formatEta(bus.secondsToBoarding)}</b><br><span class="subtle">Arrives at destination in ${formatEta(bus.secondsToDestination)}</span></td></tr>`).join('') + '</table>';
+  }
+  html += '</div>';
+
+  // Every stop on the way with cumulative distance/time from the boarding stop
+  html += `<details><summary>All ${journey.stops.length} stops on the way</summary><table>`
+        + journey.stops.map((stop, index) =>
+            `<tr><td>${stop.sequence}. ${escapeHtml(stop.name)}</td><td class="right subtle">${index === 0 ? 'boarding stop' : '+' + formatDistance(stop.distanceFromBoardingMeters) + ' · +' + formatEta(stop.secondsFromBoarding)}</td></tr>`).join('')
+        + '</table></details>';
+
+  html += `<div class="subtle" style="margin-top:8px">Times are the timetable's scheduled running time${journey.etaBasis === 'distance' ? ' (unusable – assumed 20 km/h)' : ''}, not live traffic. Live buses that already passed the boarding stop are not listed.</div>`;
+  byId('plannerResult').innerHTML = html;
+}
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {}); // installable + fast start (needs https or localhost)
+startApp();
+</script></body></html>
